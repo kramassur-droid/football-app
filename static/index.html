@@ -85,6 +85,9 @@
   .manual button { width: 100%; background: var(--accent); color: #000; border: none; border-radius: 8px; padding: 12px; font-size: 15px; font-weight: 600; cursor: pointer; }
 
   .error { background: rgba(255, 90, 106, 0.1); border: 1px solid rgba(255, 90, 106, 0.4); color: var(--red); padding: 10px 12px; border-radius: 8px; font-size: 13px; margin-bottom: 12px; }
+
+  .chip { flex: 1; background: var(--panel-hi); color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 8px 6px; font-size: 12px; cursor: pointer; transition: 0.15s; }
+  .chip.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -96,11 +99,36 @@
 <main>
   <div class="tabs">
     <div class="tab active" data-tab="fixtures">Upcoming</div>
-    <div class="tab" data-tab="manual">Custom match</div>
+    <div class="tab" data-tab="accas">Accas</div>
+    <div class="tab" data-tab="manual">Custom</div>
   </div>
 
   <div id="tab-fixtures">
     <div id="fixtures-list"><div class="spinner"></div></div>
+  </div>
+
+  <div id="tab-accas" style="display:none;">
+    <div style="background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:12px;">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">Time window</div>
+      <div style="display:flex;gap:6px;margin-bottom:12px;">
+        <button class="chip" data-days="1" onclick="setAccaDays(1)">Today</button>
+        <button class="chip active" data-days="3" onclick="setAccaDays(3)">3 days</button>
+        <button class="chip" data-days="7" onclick="setAccaDays(7)">7 days</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">Legs per acca</div>
+      <div style="display:flex;gap:6px;margin-bottom:12px;">
+        <button class="chip legs-chip" data-legs="auto" onclick="setAccaLegs('auto')">Auto</button>
+        <button class="chip legs-chip active" data-legs="3" onclick="setAccaLegs(3)">3</button>
+        <button class="chip legs-chip" data-legs="4" onclick="setAccaLegs(4)">4</button>
+        <button class="chip legs-chip" data-legs="5" onclick="setAccaLegs(5)">5</button>
+        <button class="chip legs-chip" data-legs="6" onclick="setAccaLegs(6)">6</button>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);cursor:pointer;">
+        <input type="checkbox" id="acca-all-leagues" onchange="loadAccas()" style="width:16px;height:16px;accent-color:var(--accent);">
+        Build from all leagues (not just selected)
+      </label>
+    </div>
+    <div id="accas-content"><div class="spinner"></div></div>
   </div>
 
   <div id="tab-manual" style="display:none;">
@@ -156,8 +184,188 @@ async function init() {
     t.classList.add('active');
     const tab = t.dataset.tab;
     $('#tab-fixtures').style.display = tab === 'fixtures' ? '' : 'none';
+    $('#tab-accas').style.display = tab === 'accas' ? '' : 'none';
     $('#tab-manual').style.display = tab === 'manual' ? '' : 'none';
+    if (tab === 'accas') loadAccas();
   }));
+}
+
+let accaDays = 3;
+let accaLegs = 3;  // 'auto' or a number
+
+function setAccaDays(d) {
+  accaDays = d;
+  document.querySelectorAll('.chip').forEach(c => {
+    if (c.dataset.days !== undefined)
+      c.classList.toggle('active', +c.dataset.days === d);
+  });
+  loadAccas();
+}
+
+function setAccaLegs(n) {
+  accaLegs = n;
+  document.querySelectorAll('.legs-chip').forEach(c => {
+    const val = c.dataset.legs;
+    c.classList.toggle('active', val === String(n));
+  });
+  loadAccas();
+}
+
+function targetLegsQS() {
+  return accaLegs === 'auto' ? '' : `&target_legs=${accaLegs}`;
+}
+
+async function loadAccas() {
+  $('#accas-content').innerHTML = '<div class="spinner"></div>';
+  const allLeagues = $('#acca-all-leagues').checked;
+  try {
+    if (allLeagues) {
+      await loadAccasAllLeagues();
+    } else {
+      const r = await fetch(`${API}/api/accas/${currentLeague}?days=${accaDays}${targetLegsQS()}`);
+      if (!r.ok) throw new Error((await r.json()).detail || await r.text());
+      const data = await r.json();
+      renderAccas(data);
+    }
+  } catch(e) {
+    $('#accas-content').innerHTML = `<div class="error">Could not load accas: ${e.message}</div>`;
+  }
+}
+
+async function loadAccasAllLeagues() {
+  // Fetch per-league accas in parallel, merge all candidate legs, rebuild globally.
+  const leaguesResp = await fetch(`${API}/api/leagues`).then(r => r.json());
+  const fetches = leaguesResp.leagues.map(l =>
+    fetch(`${API}/api/accas/${l.code}?days=${accaDays}${targetLegsQS()}`).then(r => r.json()).catch(() => null)
+  );
+  const results = await Promise.all(fetches);
+
+  const allLegs = [];
+  let totalFixtures = 0;
+  for (const r of results) {
+    if (!r || !r.accas) continue;
+    totalFixtures += r.fixtures_considered || 0;
+    for (const kind of ['safe', 'value', 'max_odds_safe']) {
+      for (const l of r.accas[kind].legs) allLegs.push({ ...l, league: r.league_name });
+    }
+  }
+  const seen = new Set();
+  const deduped = allLegs.filter(l => {
+    const k = `${l.fixture_id}|${l.market_key}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+
+  // Determine cap — if target_legs is set, use it, else default 5 / 4 / 5 by kind.
+  const targetCap = accaLegs === 'auto' ? null : accaLegs;
+
+  const byFixtureSafe = {};
+  const byFixtureVal = {};
+  const safePool = {};
+  for (const m of deduped) {
+    if (m.model_prob >= 65) {
+      const c = byFixtureSafe[m.fixture_id];
+      if (!c || m.model_prob > c.model_prob) byFixtureSafe[m.fixture_id] = m;
+    }
+    if (m.edge_pct >= 3) {
+      const c = byFixtureVal[m.fixture_id];
+      if (!c || m.edge_pct > c.edge_pct) byFixtureVal[m.fixture_id] = m;
+    }
+    if (m.model_prob >= 60) {
+      const c = safePool[m.fixture_id];
+      if (!c || m.odds > c.odds) safePool[m.fixture_id] = m;
+    }
+  }
+  const safeCap = targetCap || 4;
+  const valueCap = targetCap || 5;
+  const maxCap = targetCap || 5;
+
+  const safe = Object.values(byFixtureSafe).sort((a,b) => b.model_prob - a.model_prob).slice(0, safeCap);
+  const value = Object.values(byFixtureVal).sort((a,b) => b.edge_pct - a.edge_pct).slice(0, valueCap);
+  const poolSorted = Object.values(safePool).sort((a,b) => b.odds - a.odds);
+  const maxOddsLegs = [];
+  let runningProb = 1.0;
+  const floor = targetCap ? 0.25 : 0.30;
+  for (const m of poolSorted) {
+    const next = runningProb * (m.model_prob / 100);
+    if (next < floor && !targetCap && maxOddsLegs.length >= 3) break;
+    maxOddsLegs.push(m);
+    runningProb = next;
+    if (maxOddsLegs.length >= maxCap) break;
+  }
+
+  const pack = legs => {
+    if (!legs.length) return { legs: [], combined_odds: 0, combined_prob_pct: 0, edge_pct: 0, return_on_10: 0 };
+    let odds = 1, prob = 1;
+    for (const l of legs) { odds *= l.odds; prob *= l.model_prob / 100; }
+    return {
+      legs, combined_odds: odds, combined_prob_pct: prob * 100,
+      edge_pct: (prob * odds - 1) * 100, return_on_10: 10 * odds
+    };
+  };
+
+  renderAccas({
+    fixtures_considered: totalFixtures,
+    league_name: 'all leagues',
+    days: accaDays,
+    target_legs: targetCap,
+    accas: { safe: pack(safe), value: pack(value), max_odds_safe: pack(maxOddsLegs) }
+  });
+}
+
+function renderAccas(data) {
+  if (!data.accas) {
+    $('#accas-content').innerHTML = `<div class="empty">${data.message || 'No upcoming fixtures to build accas from.'}</div>`;
+    return;
+  }
+  const { safe, value, max_odds_safe } = data.accas;
+  const windowLabel = data.days === 1 ? 'today' : `next ${data.days} days`;
+  $('#accas-content').innerHTML = `
+    <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Based on ${data.fixtures_considered} fixtures in ${data.league_name} over the ${windowLabel}.</div>
+    ${renderAcca('Safe', 'Highest-probability picks, low bust risk', safe, 'var(--accent)')}
+    ${renderAcca('Value', 'Positive edge vs bookies, longer shot', value, 'var(--green)')}
+    ${renderAcca('Max odds (safe)', 'Biggest payout while combined prob ≥ 30%', max_odds_safe, 'var(--yellow)')}
+    <div style="font-size:11px;color:var(--muted);line-height:1.5;margin-top:8px;">Accas compound bookmaker margin: a 4-fold of 70%-prob picks lands ~24% of the time. Singles have smaller edges but are more reliable. O/U and BTTS legs use fair odds estimated from the model (bookie odds not available for those markets via the free odds feed).</div>
+  `;
+}
+
+function renderAcca(title, subtitle, acca, color) {
+  if (!acca.legs.length) {
+    return `<div class="fixture" style="opacity:0.6;">
+      <div class="fixture-top"><div class="teams">${title}</div></div>
+      <div style="color:var(--muted);font-size:13px;">No qualifying picks in this window.</div>
+    </div>`;
+  }
+  const legsHtml = acca.legs.map(l => `
+    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--border);font-size:13px;">
+      <div>
+        <div style="font-weight:500;">${l.description}</div>
+        <div style="font-size:11px;color:var(--muted);">${l.match}${l.league ? ' · ' + l.league : ''} · ${fmtTime(l.commence_time)}</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-weight:500;">@ ${l.odds.toFixed(2)}</div>
+        <div style="font-size:11px;color:var(--muted);">prob ${l.model_prob}%</div>
+      </div>
+    </div>
+  `).join('');
+  const edgeCol = acca.edge_pct >= 0 ? 'var(--green)' : 'var(--red)';
+  return `<div class="fixture">
+    <div class="fixture-top">
+      <div>
+        <div style="font-size:15px;font-weight:600;color:${color};">${title}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">${subtitle}</div>
+      </div>
+      <div style="background:var(--panel-hi);padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;">${acca.legs.length}-fold</div>
+    </div>
+    <div style="margin-top:8px;">${legsHtml}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:12px;">
+      <div><div style="color:var(--muted);">Combined odds</div><div style="font-size:15px;font-weight:600;margin-top:2px;">${acca.combined_odds.toFixed(2)}</div></div>
+      <div><div style="color:var(--muted);">Combined prob</div><div style="font-size:15px;font-weight:600;margin-top:2px;">${acca.combined_prob_pct.toFixed(1)}%</div></div>
+      <div><div style="color:var(--muted);">Edge (EV)</div><div style="font-size:15px;font-weight:600;margin-top:2px;color:${edgeCol};">${acca.edge_pct >= 0 ? '+' : ''}${acca.edge_pct.toFixed(1)}%</div></div>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:8px;">£10 → £${acca.return_on_10.toFixed(2)} if all legs land</div>
+  </div>`;
 }
 
 async function loadFixtures() {

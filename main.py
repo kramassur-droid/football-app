@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse
 from predictor import PoissonPredictor
 from data_loader import LEAGUES
 from odds_client import OddsClient
+from acca_builder import propose_accas
 
 BASE = Path(__file__).parent
 MODELS_DIR = BASE / 'models'
@@ -112,6 +113,66 @@ def fixtures(league: str):
     # Sort by kickoff time
     out.sort(key=lambda x: x['commence_time'])
     return {'league': league, 'league_name': LEAGUES[league]['name'], 'fixtures': out}
+
+
+@app.get("/api/accas/{league}")
+def accas(league: str, max_legs: int = 5, days: int = 3, target_legs: Optional[int] = None):
+    """Propose three accas (safe, value, max-odds-safe) for upcoming fixtures.
+
+    Parameters:
+        max_legs: cap on legs per acca (default 5)
+        days: only consider fixtures kicking off within the next N days (default 3)
+        target_legs: if provided, try to build exactly this many legs per acca
+    """
+    if league not in LEAGUES:
+        raise HTTPException(404, f"Unknown league '{league}'")
+    if not odds_client.is_configured:
+        raise HTTPException(503, "ODDS_API_KEY not configured on server")
+
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    cutoff = now + timedelta(days=days)
+
+    model = get_model(league)
+    sport_key = LEAGUES[league]['odds_key']
+    raw = odds_client.fixtures_with_odds(sport_key)
+
+    enriched = []
+    for fx in raw:
+        # Filter by time window
+        try:
+            kickoff = datetime.fromisoformat(fx['commence_time'].replace('Z', '+00:00'))
+        except (ValueError, KeyError):
+            continue
+        if kickoff < now or kickoff > cutoff:
+            continue
+
+        try:
+            pred = model.predict_match(fx['home'], fx['away'])
+        except ValueError:
+            continue  # skip unknown teams
+        enriched.append({
+            'home': fx['home'],
+            'away': fx['away'],
+            'commence_time': fx['commence_time'],
+            'odds': fx['odds'],
+            'prediction': pred,
+        })
+
+    if not enriched:
+        return {'league': league, 'league_name': LEAGUES[league]['name'],
+                'accas': None, 'fixtures_considered': 0, 'days': days,
+                'message': f'No upcoming fixtures in the next {days} day(s) with known teams.'}
+
+    proposals = propose_accas(enriched, max_legs=max_legs, target_legs=target_legs)
+    return {
+        'league': league,
+        'league_name': LEAGUES[league]['name'],
+        'fixtures_considered': len(enriched),
+        'days': days,
+        'target_legs': target_legs,
+        'accas': proposals,
+    }
 
 
 # --- Static / PWA ---

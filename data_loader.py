@@ -39,7 +39,6 @@ def season_codes(n_seasons: int = 3) -> List[str]:
     """Returns season codes like '2324' for 2023-24. Latest N seasons."""
     import datetime as dt
     now = dt.date.today()
-    # New season starts in August; if before Aug, current season is last year's
     start_year = now.year if now.month >= 8 else now.year - 1
     codes = []
     for y in range(start_year, start_year - n_seasons, -1):
@@ -49,7 +48,7 @@ def season_codes(n_seasons: int = 3) -> List[str]:
 
 def download_league(league_code: str, n_seasons: int = 3,
                     cache_dir: Optional[Path] = None) -> pd.DataFrame:
-    """Download historical data for one league. Returns concatenated DataFrame."""
+    """Download historical data for one league."""
     cache_dir = Path(cache_dir) if cache_dir else None
     if cache_dir:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +71,6 @@ def download_league(league_code: str, n_seasons: int = 3,
                 print(f"  Skipped {league_code} {season}: {e}")
                 continue
 
-        # Keep only columns we need; normalise types
         cols = ['HomeTeam', 'AwayTeam', 'FTHG', 'FTAG']
         if not all(c in df.columns for c in cols):
             continue
