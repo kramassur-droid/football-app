@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#162044"/>
+      <stop offset="100%" stop-color="#0b1220"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="140" fill="#eaf0fb" stroke="#3ea3ff" stroke-width="8"/>
+  <!-- Classic football panel pattern -->
+  <polygon points="256,180 300,215 285,270 227,270 212,215" fill="#0b1220"/>
+  <polygon points="256,180 212,215 180,195 200,155 240,150" fill="none" stroke="#0b1220" stroke-width="6"/>
+  <polygon points="256,180 300,215 332,195 312,155 272,150" fill="none" stroke="#0b1220" stroke-width="6"/>
+  <polygon points="212,215 227,270 195,310 160,280 165,235" fill="none" stroke="#0b1220" stroke-width="6"/>
+  <polygon points="300,215 285,270 317,310 352,280 347,235" fill="none" stroke="#0b1220" stroke-width="6"/>
+  <!-- Upward-trend arrow overlay -->
+  <path d="M 360 360 L 410 310 L 400 310 L 400 290 L 430 290 L 430 320 L 420 320 L 370 370 Z" 
+        fill="#35d07f" transform="translate(-20,-10)"/>
+</svg>
