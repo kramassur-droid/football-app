@@ -47,7 +47,15 @@ def _norm(name: str) -> str:
 
 class OddsClient:
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv('ODDS_API_KEY')
+        # Store the override if provided, but ALWAYS fall back to env at call time.
+        # This avoids the "env var wasn't set at process start" issue on Railway.
+        self._override_key = api_key
+
+    @property
+    def api_key(self) -> Optional[str]:
+        # Read env var fresh on every access — strip whitespace defensively.
+        k = self._override_key or os.getenv('ODDS_API_KEY') or ''
+        return k.strip() or None
 
     @property
     def is_configured(self) -> bool:

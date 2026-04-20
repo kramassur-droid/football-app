@@ -135,3 +135,19 @@ if STATIC_DIR.exists():
 def health():
     return {'ok': True, 'models_loaded': len(_model_cache),
             'odds_configured': odds_client.is_configured}
+
+
+@app.get("/api/diagnostics")
+def diagnostics():
+    """Safe diagnostics endpoint — reveals env state without leaking secrets."""
+    raw_env = os.getenv('ODDS_API_KEY')
+    key_val = odds_client.api_key
+    return {
+        'env_var_present': raw_env is not None,
+        'env_var_raw_length': len(raw_env) if raw_env else 0,
+        'env_var_stripped_length': len(key_val) if key_val else 0,
+        'env_var_first3': key_val[:3] if key_val else None,
+        'env_var_last3': key_val[-3:] if key_val else None,
+        'models_trained': len([p for p in MODELS_DIR.glob('*.pkl')]) if MODELS_DIR.exists() else 0,
+        'models_cached': len(_model_cache),
+    }
